@@ -1,0 +1,427 @@
+---
+title: "What Are Related to College Enrollment Rates in Chicago Region? -- Statistical Analyses based on Educational and Socioeconomic Data"
+author: "Xiaorong Li"
+date: "3/14/2021"
+output: pdf_document
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(include = TRUE)
+library(ggplot2)
+```
+
+Suppose a local officer in charge of education who wants to improve college enrollment rates for schools in the Chicago region asks, which factors are actually correlated with college enrollment rates? Commonsense tells us that, better high schools of course have higher college enrollment rate; family and the community environment also play a big role, etc. We are interested in finding concrete metrics that quantify these influences and more importantly, in analysing how exactly are the metrics correlated to the college enrollment rate. For this purpose, we have gathered proper datasets from the official [Chicago Data Portal](https://data.cityofchicago.org/) and extracted the relevant information into a new dataset `CHICAGO_RESULTS`. The variables in `CHICAGO_RESULTS` are summarized in the `code.txt` file. After profound analyses of these data, we aim at proposing a few actionable suggestions for the officer.
+
+## Highlights
+        - Data exploration and visualization with ggplot2
+        - Wilcoxon sum of rank test on distribution among groups
+        - Linear regression with various model selection methods
+        - Cross Validation for model and parameter selection
+        - PCA and the LASSO for high dimension problem
+
+
+# Data exploration and visualization
+
+```{r  echo=TRUE, results='hide'}
+chicago <- read.csv("CHICAGO_RESULTS.csv")
+chicago <- chicago[, c(-1,-4)] #thought zipcode would be useful but it's not...
+attach(chicago)
+head(chicago)
+write.csv(names(chicago), file = "code.txt", row.names = FALSE)
+
+chicago$school_type <- factor(Elementary..Middle..or.High.School, levels = c("ES","MS","HS"))
+chicago$Leaders_Score <- as.numeric(gsub("NDA", NA,chicago$Leaders_Score))
+chicago$Teachers_Score <- as.numeric(gsub("NDA", NA,chicago$Teachers_Score))
+chicago$Parent_Engagement_Score <- as.numeric(gsub("NDA", NA, chicago$Parent_Engagement_Score))
+chicago$AVERAGE_STUDENT_ATTENDANCE <- gsub("%", "", chicago$AVERAGE_STUDENT_ATTENDANCE)
+chicago$AVERAGE_STUDENT_ATTENDANCE <- as.numeric(gsub("NDA", NA, chicago$AVERAGE_STUDENT_ATTENDANCE))
+
+chicago$Average_Teacher_Attendance <- gsub("%", "", chicago$Average_Teacher_Attendance)
+chicago$Average_Teacher_Attendance <- as.numeric(gsub("NDA", NA, chicago$Average_Teacher_Attendance))
+
+chicago$Graduation_Rate__ <- as.numeric(gsub("NDA", NA, chicago$Graduation_Rate__))/100
+chicago$College_Enrollment_Rate__ <- as.numeric(gsub("NDA", NA, chicago$College_Enrollment_Rate__))/100
+head(chicago)
+str(chicago)
+```
+
+After taking proper care of the data type, next we start explotory analyses via viasualization. In the dataset, some metric are represented with both numerical variables and factor. For example, `Safety_Icon` and `SAFETY_SCORE` both represent students' perception of safety, while the former is a factor created based on the latter. In the rest of analyses, it is always enough to involve one of them without explicit notification. Another thing to be noticed is the `HARDSHIP_INDEX`: according to the data documentation this index incorporates each of the other six socioeconomic indicators (i.e., `PERCENT_OF_HOUSING_CROWDED`, `PERCENT_HOUSEHOLDS_BELOW_POVERTY`, `PERCENT_AGED_16__UNEMPLOYED`, `PERCENT_AGED_25__WITHOUT_HIGH_SCHOOL_DIPLOMA`, `PERCENT_AGED_UNDER_18_OR_OVER_64` and `PER_CAPITA_INCOME`). Therefore this index can be used alone to represent a general socioeconomic condition for communities. First we have a look at the scatter plots between pairs of variables in the data.
+
+```{r  echo=TRUE}
+chicago_s <- chicago[,c(4,6,8,10,12,14,16:21,31:32)]
+pairs(chicago_s)
+```
+
+It's not hard to detect some correlations, e.g., `SAFETY_SCORE` and `Environment_Score`, `Leaders_Score` and `Teachers_Score`, `Graduation_Rate__` and `College_Enrollment_Rate__`, etc. Since there are three type of schools in the data: elementory school(`ES`), middle school(`MS`) and high school (`HS`), it would be interesting to see the data distribution among these types.
+
+## How do the data distribute among schools at various level?
+
+```{r echo=TRUE}
+library(gridExtra)
+p1 <- ggplot(chicago, aes(x=school_type, y=SAFETY_SCORE, color=school_type)) +
+        geom_boxplot()
+p2 <- ggplot(chicago, aes(x=school_type, y=Environment_Score, color=school_type)) +
+        geom_boxplot()
+
+p3 <- ggplot(chicago, aes(x=school_type, y=Instruction_Score, color=school_type)) +
+        geom_boxplot()
+
+p4 <- ggplot(chicago, aes(x=school_type, y=Teachers_Score, color=school_type)) +
+        geom_boxplot()
+
+p5 <- ggplot(chicago, aes(x=school_type, y=Parent_Engagement_Score, color=school_type)) +
+        geom_boxplot()
+
+p6 <- ggplot(chicago, aes(x=school_type, y=AVERAGE_STUDENT_ATTENDANCE, color=school_type)) +
+        geom_boxplot()
+grid.arrange(p1,p2,p3,p4,p5,p6, ncol=3)
+```
+
+
+As the boxplots above show, some variables show much difference among the three school type, for example `Environment_Score`, `Parent_Engagement_Score` and `AVERAGE_STUDENT_ATTENDANCE`. Parents' engagement is significantly higher in high school, which is likely a sign that they pay more attention when the children enter high school with the expectation for them to get enrolled in a college/university. While it's also obvious that the average student attendance drops for high schools, where students are nearly grown-ups and sometimes have their own ideas.
+
+## How do the data distribute among groups with various socioeconomic conditions?
+
+Next we have a look at the data among groups with various socioeconomic conditions. As mentioned before, a single `HARDSHIP_INDEX` has been created by the data provider to characterize the general socioeconomic conditions. Therefore we don't have to consider the six related metrics separately. But first of all, it would be helpful to have a look at the relationship between `HARDSHIP_INDEX` and its composing metrics for a better understanding. As illustrated below: higher hardship index generally corresponds to more crowding housing conditions, higher poverty level, higher unemployment rate, less education level and lower average income. In one word: the higher the `HARDSHIP_INDEX`, the harder the life.
+
+```{r }
+hardship <- chicago[,c(25:31)]
+pairs(hardship)
+```
+
+Since `HARDSHIP_INDEX` is a continuous variable, we need to first create a factor accordingly The `HARDSHIP_INDEX` is cut into 4 groups, corresponding to Easy, Average, Hard and Very hard. While most variables describing the schools don't show much difference in distribution among these groups, there may be two exceptions: `SAFETY_SCORE` and `College_Enrollment_Rate__`, as shown by the dot plots below. The general trend is that students' perception of safety are weaker in the communities with harder life condition. The college enrollment rate does not show a monotonic trend, but it's clear that the Easy group, i.e. with small `HARDSHIP_INDEX`, shows the highest enrollment rate. Whether these differences between groups are statistically significant? This can only be answered with proper hypothesis testing.
+
+```{r}
+library(dplyr)
+chicago$hardship_icon <- cut(HARDSHIP_INDEX, 4, labels = c("Easy", "Average", "Hard", "Very Hard"), ordered_result = TRUE)
+
+p1 <- ggplot(chicago, aes(x=hardship_icon, y=SAFETY_SCORE, color= hardship_icon, fill=hardship_icon)) +
+        geom_dotplot(binaxis = 'y', stackdir ='center', dotsize = 0.6) +
+        geom_violin(trim = FALSE, alpha=0.2)
+p11 <- p1 + stat_summary(fun.y=mean, goem="point", shape = 18, color="red") 
+
+
+
+p2 <- ggplot(chicago, aes(x=hardship_icon, y=College_Enrollment_Rate__, color= hardship_icon, fill=hardship_icon)) +
+        geom_dotplot(binaxis = 'y', stackdir ='center', dotsize = 0.6) +
+        geom_violin(trim = FALSE, alpha=0.2)
+p22 <- p2 + stat_summary(fun.y=mean, goem="point", shape = 18, color="red")
+
+grid.arrange(p11, p22, ncol=2)
+```
+
+## Are there differences between groups with various socioeconomic conditions?
+
+Looking at the distributions shonw above for each group, we can hardly say the samples follow a normal distribution. For `SAFETY_SCORE` in the Easy and Average group, the non-bell shape may be due to small number of samples; while for `College_Enrollment_Rate__` in all the 4 groups, it is clear that we have too few samples (recall that only a small portion of the schools are high schools, which have `College_Enrollment_Rate__`). Taking this into consideration, a few two-sample Wilcoxon tests (also know as Mann-Whitney test) are performed to find out the fact. Wilcoxon sum of rank test belongs to the catogery of permutation test, which is suitable for small number of samples.
+
+
+```{r}
+#test SAFETY_SCORE
+ts1 <- wilcox.test(chicago$SAFETY_SCORE[chicago$hardship_icon=="Easy"], 
+                   chicago$SAFETY_SCORE[chicago$hardship_icon=="Average"], alternative = "greater")
+
+ts2 <- wilcox.test(chicago$SAFETY_SCORE[chicago$hardship_icon=="Average"], 
+                   chicago$SAFETY_SCORE[chicago$hardship_icon=="Hard"], alternative = "greater")
+
+ts3 <- wilcox.test(chicago$SAFETY_SCORE[chicago$hardship_icon=="Hard"], 
+                   chicago$SAFETY_SCORE[chicago$hardship_icon=="Very Hard"], alternative = "greater")
+
+#test college enrollment rate
+tc1 <- wilcox.test(chicago$College_Enrollment_Rate__[chicago$hardship_icon=="Easy"],
+                   chicago$College_Enrollment_Rate__[chicago$hardship_icon=="Average"], alternative = "greater")
+
+tc2 <- wilcox.test(chicago$College_Enrollment_Rate__[chicago$hardship_icon=="Easy"],
+                   chicago$College_Enrollment_Rate__[chicago$hardship_icon=="Very Hard"], alternative = "greater")
+
+```
+
+Since there are 4 groups, we perform pairwise tests as shown below. When comparing the Easy and Average groups, the p-value is `r ts1$p.value`, which indicates that `SAFETY_SCORE` of Easy group is significantly higher than that of Average group at a level of 99.9%. The same conclusion can be drawn for group Average and Hard, with an even smaller p-value = `r ts2$p.value`. In contrast, the difference between Hard and Very Hard groups is not statistically significant.
+
+Similar tests are done for `College_Enrollment_Rate__`. We find that the difference between Easy and Average groups is significant at 90% level with p-value = `r tc1$p.value`, while that between Easy and Very Hard groups is significant at 95% level with p-value = `r tc2$p.value`. 
+
+A few concluding remarks about the test results: in general we do detect differences between groups with various socioeconomic conditions. `SAFETY_SCORE`s clearly are different for various life hardship. Students living an easier life generally tend to show better safety perceptions. While for `College_Enrollment_Rate__`, the difference is not as great. At the same time, this metric is also much more objective, not depending on individuals' feelings. We see that for the Easy group some schools also achieve very low enrollment rate, while there are also a few with much higher enrollment rate in the Hard and Very Hard groups. Nevertheless, we saw a statistically significant difference between Easy and Very Hard groups, as mentioned before.
+
+
+## Does the public security affect `SAFETY_SCORE` of students?
+
+I am personally curious about this question. Therefore similar analyses as the section above are performed. Here the public security is roughly manifested by `ARRESTED_CASES`. As the dot plot tells, there seems to be not much correlation. Therefore, the `SAFETY_SCORE` of students in a perticular school should be interpreted more from the perspective of socioeconomic environment.
+
+```{r}
+chicago$crime_icon <- cut(ARRESTED_CASES, 4, ordered_result = TRUE)
+
+p1 <- ggplot(chicago, aes(x=crime_icon, y=SAFETY_SCORE, color= crime_icon, fill=crime_icon)) +
+        geom_dotplot(binaxis = 'y', stackdir ='center', dotsize = 0.6) +
+        geom_violin(trim = FALSE, alpha=0.2)
+p1 + stat_summary(fun.y=mean, goem="line", shape = 18, color="red") 
+
+```
+
+# Linear Regression model for college enrollment rate
+
+Now let's build up regression models for the college enrollment rate. This only applies to high schools, of course. We try to fit college enrollment rate on all the predictors and get an immediate problem: there are too many predictors (12) and too few observations (11) after removing NA values. So we need to revisit our dataset. It turns out that most NAs occur for predictors `Leaders_Score`, `Teachers_Score` and `Parent_Engagement_Score`. At the moment we remove these predictors.
+
+## Best subset selection
+
+Since the number of the predictors in our case is not huge, we can use best subset method to exhausively choose the best model in all possible combination of the predictors. The function `regsubsets` does this job and returns the best models for each model size from 1 to total number of predictors. Afterwards, the final best one can be chosen according to ajusted r2, BIC or Cp. In our case, bic suggests 4 predictors: `SAFETY_SCORE`, `Environment_Score`, `Instruction_Score` and `Graduation_Rate__`, while ajusted r2 and cp suggest 5 predictors, with `Rate_of_Misconducts__per_100_students_` added. 
+
+Note: when checking the correlation matrix of the predictors, we see pretty much correlation between the predictors. For the convinience of interpretation, we keep the predictors as they are and don't deal with the collinearity at current stage.
+
+```{r}
+chicago_reg <- chicago[,c(6,8,10,12,14,16:21,31)][chicago$Elementary..Middle..or.High.School=="HS",]
+dim(chicago_reg)
+
+sum(is.na(chicago_reg$Leaders_Score))
+sum(is.na(chicago_reg$Teachers_Score))
+sum(is.na(chicago_reg$Parent_Engagement_Score))
+
+chicago_reg <- chicago_reg[, -(4:6)]
+chicago_reg <- na.omit(chicago_reg)
+dim(chicago_reg)
+#cor(chicago_reg)
+
+library(leaps)
+#fit0 <- regsubsets(College_Enrollment_Rate__~. -Graduation_Rate__, data=chicago_reg, method = "exhaustive", nvmax=8)
+fit0 <- regsubsets(College_Enrollment_Rate__~., data=chicago_reg, method = "exhaustive", nvmax=8)
+fit0.summary <- summary(fit0)
+names(fit0.summary)
+par(mfrow=c(2,2))
+plot(fit0.summary$rss, xlab="number of variables", ylab="RSS", type="l")
+plot(fit0.summary$adjr2, xlab="number of variables", ylab="ajusted r2", type="l")
+plot(fit0.summary$bic, xlab="number of variables", ylab="BIC", type="l")
+plot(fit0.summary$cp, xlab="number of variables", ylab="CP", type="l")
+```
+
+### K-fold cross validation selection
+
+We can also perform K-fold cross validation on the data to select the overall best model according to the lowest test error. In current case k is set to 5. At the very begining, each row of the data is randomly assigned a number, which indicates to which fold this row belongs. For each fold from 1 to k, a best subset object is fit on the data not belonging to this fold; then for each size from 1 to p, the models are applied on the data in k-th fold and errors are calculated. According to the cross validation result, the best overall model is also the 4-predictor model. Therefore we use it as the overall best one for succeeding discussion. In addtion, it's also necessary to check the residuals distribution of this model. They turn out to show a good zero-mean and homoscedastic normal distribution.
+
+```{r}
+library(boot)
+predict.regsubsets <- function(object, newdata, id,...) {
+        form <- as.formula(object$call[[2]])
+        mat <- model.matrix(form, newdata)
+        coefi <- coef(object, id=id)
+        xvars <- names(coefi)
+        mat[,xvars]%*%coefi
+}
+
+k <- 5
+p <- ncol(chicago_reg)-1 # if Graduation_Rate__ is in
+#p <- ncol(chicago_reg)-2 # if Graduation_Rate__ is out
+set.seed(1)
+folds <- sample(1:k, nrow(chicago_reg), replace=TRUE) #assign each row a number, which is between 1 and k
+cv.errors <- matrix(NA, k, p)
+for (j in 1:k) {
+        best.fit <- regsubsets(College_Enrollment_Rate__~.,data=chicago_reg[folds!=j,], nvmax=p)
+        #best.fit <- regsubsets(College_Enrollment_Rate__~.-Graduation_Rate__,data=chicago_reg[folds!=j,], nvmax=p)
+        for (i in 1:p){
+                pred <- predict.regsubsets(best.fit, chicago_reg[folds==j,], id=i)
+                cv.errors[j,i] <- mean((pred - chicago_reg$College_Enrollment_Rate__[folds==j])^2)
+        }
+}
+mean.cv.errors=apply(cv.errors,2,mean)
+plot(mean.cv.errors, xlab = "number of predictors")
+which.min(mean.cv.errors)
+
+fit4best <- lm(College_Enrollment_Rate__~ SAFETY_SCORE + Environment_Score + 
+                       Instruction_Score + Graduation_Rate__, data = chicago_reg)
+summary(fit4best)
+
+# check the model assumptions
+par(mfrow=c(2,2))
+plot(fit4best, which = 1)
+plot(fit4best, which = 2)
+plot(fit4best, which = 3)
+plot(fit4best, which = 5)
+
+```
+
+In the 4-predictor model, the slopes are all significant at 99% level. The coefficients for `SAFETY_SCORE`, `Instruction_Score` and `Graduation_Rate__` are positive, while that for `Environment_Score` is negative. Especially, the coefficient for `Graduation_Rate__` is around 0.5, outstandingly higher than others. This indicates that, when keeping the other predictors fixed, every unit increase in `Graduation_Rate__` corresponds to half unit increase in `College_Enrollment_Rate__`. This is a little bit trivial, since we natually expect a large portion of student that successfully graduate from high schools to get enrolled in colleges/universities.
+
+### What if we exclude `Graduation_Rate__`?
+
+So, if we predic college enrollment rate with `Graduation_Rate__`, the influence of other predictors might be weakened. Or, from another perspective, the educational officer might ask, how to increase the graduation rate AND the college enrollment rate, as he tends to think both of them as the response/dependent variable. Or, if we tell the officer, in order to increase college enrollment rate, the most effective way is to increase high school graduation rate. Then we can certainly imagine he would immediately ask: how to increase that then?
+
+Let's see what happens if we remove `Graduation_Rate__` from our predictors. This time, ajusted r2, BIC and Cp all suggest the 4-predictor model. While the cross validation test errors suggest the 3-predictor model. Both models show valid residual distributions.
+
+```{r}
+fit_nograd <- regsubsets(College_Enrollment_Rate__~. -Graduation_Rate__, data=chicago_reg, method = "exhaustive", nvmax=8)
+summary(fit_nograd)
+
+fit_nograd.summary <- summary(fit_nograd)
+
+par(mfrow=c(2,2))
+plot(fit_nograd.summary$rss, xlab="number of variables", ylab="RSS", type="l")
+plot(fit_nograd.summary$adjr2, xlab="number of variables", ylab="ajusted r2", type="l")
+plot(fit_nograd.summary$bic, xlab="number of variables", ylab="BIC", type="l")
+plot(fit_nograd.summary$cp, xlab="number of variables", ylab="CP", type="l")
+
+fit_nograd4 <- lm(College_Enrollment_Rate__~ SAFETY_SCORE + Environment_Score + Instruction_Score + 
+                          AVERAGE_STUDENT_ATTENDANCE, data = chicago_reg)
+summary(fit_nograd4)
+
+# check model assumptions
+par(mfrow=c(2,2))
+plot(fit_nograd4, which=1)
+plot(fit_nograd4, which=2)
+plot(fit_nograd4, which=3)
+plot(fit_nograd4, which=5)
+
+# cross validation errors indicate 3-predictor model is the best
+fit_nograd3 <- lm(College_Enrollment_Rate__~ SAFETY_SCORE + Environment_Score + Instruction_Score, data = chicago_reg)
+summary(fit_nograd3)
+
+par(mfrow=c(2,2))
+plot(fit_nograd3, which=1)
+plot(fit_nograd3, which=2)
+plot(fit_nograd3, which=3)
+plot(fit_nograd3, which=5)
+
+```
+
+Now let's compare the coefficients we get from the 4-predictor model including `Graduation_Rate__`, and the 3- and 4-predictor models excluding `Graduation_Rate__`. First of all, the removal of `Graduation_Rate__` does not change the signs of the slopes. Secondly, the magnitudes of the slopes all increase after removing `Graduation_Rate__`, which means that the influence of the other predictors are magnified. Thirdly, the slopes of the 3- and 4-predictor models excluding `Graduation_Rate__` are similar. So according to these models, `SAFETY_SCORE`, `Instruction_Score` and `AVERAGE_STUDENT_ATTENDANCE` show positive correlation and `Environment_Score` of the schools shows negative correlation to the college enrollment rate.
+
+```{r}
+coef(fit4best)
+coef(fit_nograd3)
+coef(fit_nograd4)
+```
+
+## Can we add `Leaders_Score`, `Teachers_Score` and `Parent_Engagement_Score` back? -- high dimensional problem
+
+Now let's not forget that before doing the regression show above, we removed three predictors because there are too many NAs in them. However, as their self-explanatory names imply, these can probably be important factors that affect the college enrollment rate. Can we try to add them back into the model? Then we sadly have only 11 observations, but there is still something to do: Principal Component Analyses (PCA) and the Lasso.
+
+### PCA
+PCA helps reduce the dimensionality because we can expect the first a few principal components to explain a large portion of the predictors. According to the results of cross validation, we see that the 3-component model achieves pretty low mean squared error, representing 80% variance in all the predictors. Therefore we determine to explore further with this model. Note: in this work the predictor `Graduation_Rate__` is excluded, too.
+
+```{r}
+library(pls)
+chicago_reg <- chicago[,c(6,8,10,12,14,16:21,31)][chicago$Elementary..Middle..or.High.School=="HS",]
+chicago_reg <- chicago_reg[,-10] # remove Graduation_Rate__
+chicago_reg <- na.omit(chicago_reg)
+dim(chicago_reg)
+#cor(chicago_reg)
+attach(chicago_reg)
+
+set.seed(123)
+pcr.fit <- pcr(College_Enrollment_Rate__~., data=chicago_reg, scale=TRUE,validation="CV")
+summary(pcr.fit)
+validationplot(pcr.fit,val.type="MSEP")
+
+prc.fit_3comp <- lm(chicago_reg$College_Enrollment_Rate__~ pcr.fit$scores[,1]+
+                            pcr.fit$scores[,2]+pcr.fit$scores[,3])
+summary(prc.fit_3comp)
+```
+
+We see that only the coefficient for the first principal component is significant. Let's investigate what the *first principal component* stands for. For this purpose, principal components analysis is done on the design matrix, i.e., with the response `College_Enrollment_Rate__` removed. Then a biplot is made to visualize how the first component is composed. As shown in the figure below, the loadings for `SAFETY_SCORE`, `Instruction_Score`, `Environment_Score` are big and relatively at the same level, while the loadings for `AVERAGE_STUDENT_ATTENDANCE`, `Teachers_Score`, `Parent_Engagement_Score` and `Leaders_Score` are smaller, but still positive. In contrast, the loading for `Rate_of_Misconducts__per_100_students_` is of a moderate level with a negative value and `Average_Teacher_Attendance` and `HARDSHIP_INDEX` have relatively small negative loadings. The *second principal component* explains the variance in the predictors that are not explained by the first principal component and has the largest loading for `HARDSHIP_INDEX`.
+
+In consistence with the three models obtained before with the original predictors, we see that `SAFETY_SCORE` and `Instruction_Score` important ones that are positively correlated with the responce. However, the coefficient for `Environment_Score` has flipped its sign. This does not lead to a simple conclusion that `Environment_Score` is positively or negatively correlated to the response, or even worse, which model is wrong or right. Rather, we need to clarify *what other predictors are also in the model*, since these predictors show collinearity and they affect each others' coefficient. For the PCA case, since all the predictors are in the model (no predictor selection), the `Environment_Score`'s coefficient has to adjust to their existence. In addition, the loading of a predictor in the first principal component does not necessarily determine its *overall sign*! Though in current case, if we only include 3 principal components, the sign for `Environment_Score` is also positive, since sum of the two loadings is positive.
+
+```{r  fig.width=15, fig.height=10}
+designmat <- chicago_reg[, -10] #remove the response: College_Enrollment_Rate__
+pr.comp <- prcomp(designmat, scale=TRUE)
+biplot(pr.comp)
+```
+
+### The LASSO
+
+Besides PCA, another solution is use the LASSO, which belongs to the shrinkage method that helps reduce the flexibility of models in case of high dimention. We could also use ridge regression. But the nice side about the LASSO is that it helps to select the predictors since as the penalty increases, some of the coefficients can drop to exact zero. Again, we don't include `Graduation_Rate__` as a predictor. We fit the model with a sequence of lambda values and then do cross validation to pickout the best one. However, the the current case the best lambda chosen by cross validation does not exclude any predictors. If we increase lambda, some predictors will certainly drop, at the cost of increased cross validation errors.
+
+```{r}
+library(glmnet)
+
+x <- model.matrix(College_Enrollment_Rate__~., chicago_reg)[,-1] #remove the 1s in the first column
+y <- chicago_reg$College_Enrollment_Rate__
+lambdagrid <- 10^seq(3, -6, length=100)
+lasso.fit <- glmnet(x, y, alpha = 1, lambda = lambdagrid) # lasso: alpha=1
+names(lasso.fit)
+
+# Cross validation
+set.seed(123)
+cv.result <- cv.glmnet(x, y, alpha=1)
+plot(cv.result)
+bestlambda <- cv.result$lambda.min
+bestlambda
+predict(lasso.fit, s= bestlambda, type = "coefficients")
+predict(lasso.fit, s= 0.1, type = "coefficients")
+```
+
+## Summary on linear regression
+
+Till now we have:
+
+- tried best subset selection, and determined the overall best model based on BIC/adjusted r2 or cross validation. The results show that `SAFETY_SCORE`, `Environment_Score`, `Instruction_Score` and `Graduation_Rate__` are very important predictors. we propose to exclude `Graduation_Rate__` since using it to predict college enrollment rate is too trivial. Consequetly the first three predictors' effects are enhanced.
+
+- used PCA to deal with the high dimension problem. The biplot showing the first and second principal components indicates that, `SAFETY_SCORE`, `Instruction_Score` and `Environment_Score` are important predictors explaining the variance in the predictors.
+
+- used the LASSO also to tackle the high dimension problem and found the best penalty with cross validation. The cv-chosen lambda does not lead to effective predictor selection. Therefore the model is more complex and harder to interprete.
+
+Based on the available messages obtained from the models so far, we would suggest the educational officer to mainly focus on three predictors: `SAFETY_SCORE`, `Environment_Score` and `Instruction_Score`. As will be illustrated just below, `SAFETY_SCORE` further shows strong correlation with `PERCENT_AGED_16__UNEMPLOYED` and `PER_CAPITA_INCOME`. Therefore, I would also suggest the educational officer to consider these two factors, if possible.
+
+### A small extension on `SAFETY_SCORE`
+
+Do you still remember that we performed wilcoxon sum of rank test and saw that students from school that lie in communities with various socioeconomic conditions repsent statistically significant differences in their perceptions of safety. However while doing regression, we only used an overall indicator for the socioeconomic conditions: the `HARDSHIP_INDEX`. Can we dig a bit deeper on this point and look into the components that have been used to create `HARDSHIP_INDEX`? Are there any more detailed correlations?
+
+```{r}
+chicago_safety <- cbind(chicago$SAFETY_SCORE, chicago[, c(25:30)])
+names(chicago_safety)[1] <- "SAFETY_SCORE"
+
+chicago_safety <- na.omit(chicago_safety)
+chicago_safety <- data.frame(scale(chicago_safety)) # scaled because per capita income is too large
+dim(chicago_safety)
+#cor(chicago_safety)
+
+pairs(chicago_safety)
+
+```
+
+From the pair plot shown above, we do see potential correlation between `SAFETY_SCORE` and for example, `PER_CAPITA_INCOME`. Let's now regress `SAFETY_SCORE` on these predictors that were not directly used in the main regression work doen for college enrollment rate. The full model shows that global null is clearly rejected! Then we can do model selection using best subset method since there are only 6 predictors. The BIC suggests the overall best model should be the 2-predictor model, while adjusted r2 and Cp suggest the 4-predictor model. We look at them respectively.
+
+```{r}
+safety.fit <- lm(SAFETY_SCORE~., data = chicago_safety)
+summary(safety.fit)
+
+
+safety.fit <- regsubsets(SAFETY_SCORE~., data = chicago_safety, method = "exhaustive", nvmax=6)
+safety.fit.summary <- summary(safety.fit)
+
+par(mfrow=c(2,2))
+plot(safety.fit.summary$rss, xlab="number of variables", ylab="RSS", type="l")
+plot(safety.fit.summary$adjr2, xlab="number of variables", ylab="ajusted r2", type="l")
+plot(safety.fit.summary$bic, xlab="number of variables", ylab="BIC", type="l")
+plot(safety.fit.summary$cp, xlab="number of variables", ylab="CP", type="l")
+
+```
+
+So in both models, `PERCENT_AGED_16__UNEMPLOYED` and `PER_CAPITA_INCOME` are included with significant coefficients, showing negative and positive correlations, respectively. In the 4-predictor model, `PERCENT_OF_HOUSING_CROWDED` and `PERCENT_AGED_UNDER_18_OR_OVER_64` are additionally included with significant coefficients but on a much lower level compared to the first two predictors.
+
+```{r}
+safety.best2 <- lm(SAFETY_SCORE~PERCENT_AGED_16__UNEMPLOYED+PER_CAPITA_INCOME, data = chicago_safety)
+summary(safety.best2)
+
+safety.best4 <- lm(SAFETY_SCORE~PERCENT_AGED_16__UNEMPLOYED+PER_CAPITA_INCOME+PERCENT_OF_HOUSING_CROWDED+PERCENT_AGED_UNDER_18_OR_OVER_64, data = chicago_safety)
+summary(safety.best4)
+
+coef(safety.best2)
+coef(safety.best4)
+
+#check model assumptions
+par(mfrow=c(2,2))
+plot(safety.best2, which = 1)
+plot(safety.best2, which = 2)
+plot(safety.best2, which = 3)
+plot(safety.best2, which = 5)
+
+par(mfrow=c(2,2))
+plot(safety.best4, which = 1)
+plot(safety.best4, which = 2)
+plot(safety.best4, which = 3)
+plot(safety.best4, which = 5)
+```
+
+# Conclusion and outlooking
+
+In this project, we aim at helping an educational officer understand which factors influence the college enrollment rates in Chicago region, and identify the factors through quantitative analyses. We explored the dataset with various visualization and found a few interesting phenomena. Finally we performed regressions in order to reveal various correlations quantitatively. Our models emphasize the importance of `SAFETY_SCORE`, `Environment_Score` and `Instruction_Score`, with `SAFETY_SCORE` further correlated to `PERCENT_AGED_16__UNEMPLOYED` and `PER_CAPITA_INCOME`. We would suggest the educational officer to mainly take these into consideration.
+
+Till now we have focused on looking at the high schools themselves when doing the regression. It would be very interesting to look at the elementory and middle schools located nearby or in the same community, since we can natually expect that, student's performance in the high school also depend on their previous education experience, which probably has taken place in the schools nearby. More concretely, we can create more predictors characterizing the nearby elementory/middle schools for each high school and take them into consideration when doing regression.
