@@ -46,7 +46,7 @@ head(chicago)
 str(chicago)
 ```
 
-After taking proper care of the data type, next we start explotory analyses via viasualization. In the dataset, some metric are represented with both numerical variables and factor. For example, `Safety_Icon` and `SAFETY_SCORE` both represent students' perception of safety, while the former is a factor created based on the latter. In the rest of analyses, it is always enough to involve one of them without explicit notification. Another thing to be noticed is the `HARDSHIP_INDEX`: according to the data documentation this index incorporates each of the other six socioeconomic indicators (i.e., `PERCENT_OF_HOUSING_CROWDED`, `PERCENT_HOUSEHOLDS_BELOW_POVERTY`, `PERCENT_AGED_16__UNEMPLOYED`, `PERCENT_AGED_25__WITHOUT_HIGH_SCHOOL_DIPLOMA`, `PERCENT_AGED_UNDER_18_OR_OVER_64` and `PER_CAPITA_INCOME`). Therefore this index can be used alone to represent a general socioeconomic condition for communities. First we have a look at the scatter plots between pairs of variables in the data.
+After taking proper care of the data type, next we start explotory analyses via viasualization. In the dataset, some metrics are represented with both numerical variables and factor. For example, `Safety_Icon` and `SAFETY_SCORE` both represent students' perception of safety, while the former is a factor created based on the latter. In the rest of analyses, it is always enough to involve one of them without explicit notification. Another thing to be noticed is the `HARDSHIP_INDEX`: according to the data documentation this index incorporates each of the other six socioeconomic indicators (i.e., `PERCENT_OF_HOUSING_CROWDED`, `PERCENT_HOUSEHOLDS_BELOW_POVERTY`, `PERCENT_AGED_16__UNEMPLOYED`, `PERCENT_AGED_25__WITHOUT_HIGH_SCHOOL_DIPLOMA`, `PERCENT_AGED_UNDER_18_OR_OVER_64` and `PER_CAPITA_INCOME`). Therefore this index can be used alone to represent a general socioeconomic condition for communities. First we have a look at the scatter plots between pairs of variables in the data.
 
 ```{r  echo=TRUE}
 chicago_s <- chicago[,c(4,6,8,10,12,14,16:21,31:32)]
@@ -301,7 +301,7 @@ chicago_reg <- chicago[,c(6,8,10,12,14,16:21,31)][chicago$Elementary..Middle..or
 chicago_reg <- chicago_reg[,-10] # remove Graduation_Rate__
 chicago_reg <- na.omit(chicago_reg)
 dim(chicago_reg)
-#cor(chicago_reg)
+cor(chicago_reg)
 attach(chicago_reg)
 
 set.seed(123)
@@ -334,12 +334,12 @@ library(glmnet)
 x <- model.matrix(College_Enrollment_Rate__~., chicago_reg)[,-1] #remove the 1s in the first column
 y <- chicago_reg$College_Enrollment_Rate__
 lambdagrid <- 10^seq(3, -6, length=100)
-lasso.fit <- glmnet(x, y, alpha = 1, lambda = lambdagrid) # lasso: alpha=1
+lasso.fit <- glmnet(x, y, alpha = 1, lambda = lambdagrid, standardize = TRUE) # lasso: alpha=1
 names(lasso.fit)
-
+plot(lasso.fit, xvar="lambda",label=TRUE)
 # Cross validation
 set.seed(123)
-cv.result <- cv.glmnet(x, y, alpha=1)
+cv.result <- cv.glmnet(x, y, alpha=1, standardize = TRUE)
 plot(cv.result)
 bestlambda <- cv.result$lambda.min
 bestlambda
