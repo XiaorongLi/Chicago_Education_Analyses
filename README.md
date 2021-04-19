@@ -10,7 +10,7 @@ Suppose a local officer in charge of education who wants to improve college enro
 - Wilcoxon sum of rank test on distribution among groups
 - Linear regression with various model selection methods
 - Cross Validation for model and parameter selection
-- PCA and the LASSO for high dimension problem
+- Missing value imputation
 
 ## Files
 
